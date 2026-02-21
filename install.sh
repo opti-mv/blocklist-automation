@@ -11,6 +11,10 @@ DEST_DIR_DEFAULT="/opt/blocklist"
 DEST_DIR="${DEST_DIR:-$DEST_DIR_DEFAULT}"
 
 LOG_DIR="/var/log/blocklist"
+SYSTEMD_SERVICE_NAME="blocklist-automation.service"
+SYSTEMD_TIMER_NAME="blocklist-automation.timer"
+SYSTEMD_SERVICE_PATH="/etc/systemd/system/${SYSTEMD_SERVICE_NAME}"
+SYSTEMD_TIMER_PATH="/etc/systemd/system/${SYSTEMD_TIMER_NAME}"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -79,6 +83,10 @@ download_file() {
   curl -fsSL "$url" -o "$out"
 }
 
+has_systemd() {
+  command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
 ensure_dirs() {
   mkdir -p "$DEST_DIR" "$LOG_DIR"
   chmod 750 "$LOG_DIR" || true
@@ -121,10 +129,42 @@ sync_blocklist_files() {
   log "syncing files to $DEST_DIR from $REPO_RAW_BASE"
 
   download_file "$REPO_RAW_BASE/blocklist/blocklists.txt" "$DEST_DIR/blocklists.txt"
+  download_file "$REPO_RAW_BASE/blocklist/allowlist.txt" "$DEST_DIR/allowlist.txt"
   download_file "$REPO_RAW_BASE/blocklist/download_and_create_ipsets.sh" "$DEST_DIR/download_and_create_ipsets.sh"
   download_file "$REPO_RAW_BASE/blocklist/set-ipsets2drop.sh" "$DEST_DIR/set-ipsets2drop.sh"
+  download_file "$REPO_RAW_BASE/uninstall.sh" "$DEST_DIR/uninstall.sh"
 
-  chmod 700 "$DEST_DIR/download_and_create_ipsets.sh" "$DEST_DIR/set-ipsets2drop.sh" || true
+  chmod 700 "$DEST_DIR/download_and_create_ipsets.sh" "$DEST_DIR/set-ipsets2drop.sh" "$DEST_DIR/uninstall.sh" || true
+}
+
+remove_managed_cron_block() {
+  local marker_begin="# BEGIN blocklist-automation (managed)"
+  local marker_end="# END blocklist-automation (managed)"
+  local tmp
+
+  if ! need_cmd crontab; then
+    log "crontab not found; skipping cron cleanup"
+    return 0
+  fi
+
+  tmp="$(mktemp)"
+  if crontab -l >"$tmp" 2>/dev/null; then
+    true
+  else
+    : >"$tmp"
+  fi
+
+  awk -v begin="$marker_begin" -v end="$marker_end" '
+    $0 == begin { inblock=1; next }
+    $0 == end { inblock=0; next }
+    inblock != 1 { print }
+  ' "$tmp" \
+    | grep -vE "^[[:space:]]*# blocklist-automation \(managed\)[[:space:]]*$" \
+    | grep -vE "download_and_create_ipsets\.sh blocklists\.txt && \./set-ipsets2drop\.sh" \
+    >"$tmp.new" || true
+
+  crontab "$tmp.new" || true
+  rm -f "$tmp" "$tmp.new" 2>/dev/null || true
 }
 
 ensure_crontab() {
@@ -132,6 +172,9 @@ ensure_crontab() {
   local cron_line
   local marker_begin="# BEGIN blocklist-automation (managed)"
   local marker_end="# END blocklist-automation (managed)"
+  local tmp
+
+  need_cmd crontab || die "crontab not found (required for cron fallback scheduler)"
 
   if [[ -n "${CRON_SCHEDULE:-}" ]]; then
     schedule="$CRON_SCHEDULE"
@@ -144,8 +187,6 @@ ensure_crontab() {
   cron_line="$schedule cd $DEST_DIR && (./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh) >> $LOG_DIR/blocklist.log 2>&1"
 
   log "ensuring root crontab entry"
-
-  local tmp
   tmp="$(mktemp)"
 
   # Fetch current crontab (if any)
@@ -178,13 +219,56 @@ ensure_crontab() {
   rm -f "$tmp" "$tmp.new" "$tmp.final" 2>/dev/null || true
 }
 
+install_systemd_timer() {
+  log "configuring systemd timer ($SYSTEMD_TIMER_NAME)"
+
+  cat > "$SYSTEMD_SERVICE_PATH" <<EOF
+[Unit]
+Description=Update blocklist sets and ensure firewall drop rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$DEST_DIR
+ExecStart=/bin/sh -c './download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh'
+EOF
+
+  cat > "$SYSTEMD_TIMER_PATH" <<'EOF'
+[Unit]
+Description=Run blocklist automation hourly at randomized minute
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=59m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now "$SYSTEMD_TIMER_NAME"
+}
+
+ensure_scheduler() {
+  if has_systemd; then
+    log "systemd detected; using systemd timer"
+    install_systemd_timer
+    remove_managed_cron_block
+  else
+    log "systemd not available; falling back to cron"
+    ensure_crontab
+  fi
+}
+
 main() {
   require_root
   install_packages_best_effort
   ensure_dirs
   sync_blocklist_files
   configure_logrotate
-  ensure_crontab
+  ensure_scheduler
   log "done"
   log "test run: cd $DEST_DIR && ./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh"
 }

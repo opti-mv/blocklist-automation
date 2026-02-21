@@ -16,6 +16,8 @@ MAX_NAME_LEN=31   # Max. ipset-Name
 URL_FILE="${1:-}"
 SET_PREFIX="${BLOCKLIST_SET_PREFIX:-blklst_}"
 NFT_TABLE="${BLOCKLIST_NFT_TABLE:-blocklist_auto}"
+ALLOWLIST_FILE_DEFAULT="$(dirname "$URL_FILE")/allowlist.txt"
+ALLOWLIST_FILE="${BLOCKLIST_ALLOWLIST_FILE:-$ALLOWLIST_FILE_DEFAULT}"
 
 LOG_DIR="/var/log/blocklist"
 # Use a single logfile for all scripts to simplify collection/rotation
@@ -86,6 +88,17 @@ build_set_name() {
 [[ ! -f "$URL_FILE" ]] && error "File '$URL_FILE' not found"
 command -v curl  >/dev/null || error "curl not installed"
 
+ALLOWLIST_NORM_FILE="$TMPDIR/allowlist.norm"
+if [[ -f "$ALLOWLIST_FILE" ]]; then
+  grep -Ev '^[[:space:]]*(#|$)' "$ALLOWLIST_FILE" \
+    | tr -d '[:space:]' \
+    | sort -u > "$ALLOWLIST_NORM_FILE" || true
+  log "[*] allowlist loaded: $ALLOWLIST_FILE ($(wc -l < "$ALLOWLIST_NORM_FILE" | tr -d ' ' ) entries)"
+else
+  : > "$ALLOWLIST_NORM_FILE"
+  log "[*] allowlist not found (optional): $ALLOWLIST_FILE"
+fi
+
 # nft vs ipset selection: set USE_NFT=1 to force nft-mode, 0 to force ipset-mode, or auto-detect.
 # Auto prefers ipset only when ipset+iptables are available; otherwise nft.
 USE_NFT="${USE_NFT:-auto}"
@@ -150,6 +163,19 @@ while IFS= read -r url; do
   fi
 
   mapfile -t entries < <(grep -E "^${grep_regex}$" "$out_file" | sort -u)
+  before_allow=${#entries[@]}
+  if [[ -s "$ALLOWLIST_NORM_FILE" && "$before_allow" -gt 0 ]]; then
+    entries_file="$TMPDIR/entries_${setname}"
+    filtered_file="$TMPDIR/entries_${setname}.filtered"
+    printf "%s\n" "${entries[@]}" > "$entries_file"
+    grep -vxF -f "$ALLOWLIST_NORM_FILE" "$entries_file" > "$filtered_file" || true
+    mapfile -t entries < "$filtered_file"
+    removed=$(( before_allow - ${#entries[@]} ))
+    if (( removed > 0 )); then
+      log "[*] allowlist excluded $removed entries for $setname"
+    fi
+  fi
+
   count=${#entries[@]}
   if (( count == 0 )); then
     log "[!] no valid entries in $fname (skipped)"

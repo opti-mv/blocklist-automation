@@ -1,0 +1,8 @@
+# allowlist.txt
+# Optional: one IP or CIDR per line. Matching entries are removed from downloaded blocklists.
+# Empty lines and lines starting with '#' are ignored.
+#
+# Examples:
+# 203.0.113.10
+# 198.51.100.0/24
+# 2001:db8::/32

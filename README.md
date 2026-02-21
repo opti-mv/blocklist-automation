@@ -14,20 +14,24 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 
 - Installs required packages (Debian/Ubuntu via apt; best-effort)
 - Creates `/opt/blocklist`
-- Downloads scripts + `blocklists.txt` from this repo
+- Downloads scripts + `blocklists.txt` + optional `allowlist.txt` from this repo
 - Creates `/var/log/blocklist` with safe permissions
-- Installs/updates a managed root crontab block to refresh lists/sets and ensure DROP rules
+- Installs a scheduler:
+  - systemd timer when available
+  - cron fallback otherwise
 
 - Collects all script output into a single logfile `/var/log/blocklist/blocklist.log` and configures
-  `logrotate` to rotate/compress logs (managed by `install.sh`). The crontab entry is updated to
-  append both `download_and_create_ipsets.sh` and `set-ipsets2drop.sh` output into that file.
+  `logrotate` to rotate/compress logs (managed by `install.sh`). The installed scheduler
+  (`systemd` timer or cron fallback) runs both scripts and appends output into that file.
 
 ## Files
 
 - `blocklist/blocklists.txt` – list of source URLs
+- `blocklist/allowlist.txt` – optional IP/CIDR exceptions that must never be blocked
 - `blocklist/download_and_create_ipsets.sh` – downloads lists and updates ipsets
 - `blocklist/set-ipsets2drop.sh` – ensures iptables/ip6tables rules exist
 - `install.sh` – installer used by the one-liner
+- `uninstall.sh` – removes managed scheduler, rules/sets and managed files
 
 Logging and rotation
 - The installer now creates `/var/log/blocklist` and configures `/etc/logrotate.d/blocklist-automation`.
@@ -44,10 +48,14 @@ nftables support
 - In nft mode, sets/rules are managed in `inet blocklist_auto` (`BLOCKLIST_NFT_TABLE`) and chain
   `input_blocklist` (`BLOCKLIST_NFT_CHAIN`).
 
+Allowlist support
+- Place trusted IPs/CIDRs in `/opt/blocklist/allowlist.txt` (or set `BLOCKLIST_ALLOWLIST_FILE`).
+- Matching entries are removed from all downloaded blocklists before sets are updated.
+
 Cron behavior
-- Existing root crontab entries are preserved.
-- A managed block for this project is added/updated.
-- Default schedule is hourly at a host-randomized minute; override with `CRON_SCHEDULE`.
+- If systemd is unavailable, existing root crontab entries are preserved and only a managed block is added/updated.
+- Cron fallback schedule is hourly at a host-randomized minute; override with `CRON_SCHEDULE`.
+- With systemd, the timer runs hourly with randomized delay (`RandomizedDelaySec=59m`).
 
 ## Notes / assumptions
 
@@ -55,3 +63,7 @@ Cron behavior
 - Source of blocklist files: https://ipv64.net/v64_blocklists
   - Hint: The source provides additional blocklists and also GeoBlocklists. If you want to use them, add the corresponding URLs to `blocklist/blocklists.txt` (and re-run the installer or wait for the next cron run).
 - Requires privileges to manage firewall sets/rules (root).
+
+Uninstall
+- Run `sudo /opt/blocklist/uninstall.sh`
+- Optional: `REMOVE_LOGS=1 sudo /opt/blocklist/uninstall.sh` to remove `/var/log/blocklist` as well.
