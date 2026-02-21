@@ -29,4 +29,5 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 
 - Designed for hosts using `iptables`/`ip6tables` (not nftables-only).
 - Source of blocklist files: https://ipv64.net/v64_blocklists
+  - Hint: The source provides additional blocklists and also GeoBlocklists. If you want to use them, add the corresponding URLs to `blocklist/blocklists.txt` (and re-run the installer or wait for the next cron run).
 - Requires privileges to manage ipset + firewall rules (root).
