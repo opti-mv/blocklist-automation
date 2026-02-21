@@ -60,6 +60,39 @@ ensure_dirs() {
   chmod 750 "$LOG_DIR" || true
 }
 
+configure_logrotate() {
+  # Ensure logrotate is installed and place a rotation policy for the unified logfile
+  if ! command -v logrotate >/dev/null 2>&1; then
+    if need_cmd apt-get; then
+      log "installing logrotate"
+      apt-get update -y || true
+      apt-get install -y logrotate || true
+    elif need_cmd yum; then
+      yum install -y logrotate || true
+    elif need_cmd apk; then
+      apk add --no-cache logrotate || true
+    else
+      log "logrotate not installed and no supported package manager found; please install logrotate manually"
+    fi
+  fi
+
+  cat > /etc/logrotate.d/blocklist-automation <<'EOF'
+/var/log/blocklist/blocklist.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    sharedscripts
+}
+EOF
+
+  # Try to force a rotate once to ensure config validity (non-fatal)
+  logrotate -f /etc/logrotate.d/blocklist-automation || true
+}
+
 sync_blocklist_files() {
   log "syncing files to $DEST_DIR from $REPO_RAW_BASE"
 
@@ -72,7 +105,8 @@ sync_blocklist_files() {
 
 ensure_crontab() {
   local cron_line
-  cron_line="$CRON_SCHEDULE cd $DEST_DIR && ./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh >> $LOG_DIR/blocklist_\$(date +\\%F).log 2>&1"
+  # Run both scripts and append all output to the single unified logfile
+  cron_line="$CRON_SCHEDULE cd $DEST_DIR && (./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh) >> $LOG_DIR/blocklist.log 2>&1"
 
   log "ensuring root crontab entry"
 
@@ -107,6 +141,7 @@ main() {
   install_packages_best_effort
   ensure_dirs
   sync_blocklist_files
+  configure_logrotate
   ensure_crontab
   log "done"
   log "test run: cd $DEST_DIR && ./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh"

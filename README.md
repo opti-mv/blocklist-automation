@@ -18,12 +18,21 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 - Creates `/var/log/blocklist` with safe permissions
 - Installs/updates a root crontab entry to refresh ipsets and ensure iptables/ip6tables DROP rules
 
+- Collects all script output into a single logfile `/var/log/blocklist/blocklist.log` and configures
+  `logrotate` to rotate/compress logs (managed by `install.sh`). The crontab entry is updated to
+  append both `download_and_create_ipsets.sh` and `set-ipsets2drop.sh` output into that file.
+
 ## Files
 
 - `blocklist/blocklists.txt` – list of source URLs
 - `blocklist/download_and_create_ipsets.sh` – downloads lists and updates ipsets
 - `blocklist/set-ipsets2drop.sh` – ensures iptables/ip6tables rules exist
 - `install.sh` – installer used by the one-liner
+
+Logging and rotation
+- The installer now creates `/var/log/blocklist` and configures `/etc/logrotate.d/blocklist-automation`.
+- All scripts write to `/var/log/blocklist/blocklist.log` by default. To override per-run, set the
+  `BLOCKLIST_LOGFILE` environment variable before running the scripts.
 
 ## Notes / assumptions
 

@@ -3,7 +3,8 @@
 set -Eeuo pipefail
 
 LOG_DIR="/var/log/blocklist"
-LOGFILE_DEFAULT="${LOG_DIR}/blocklist_rules_$(date +%F).log"
+# Write to unified logfile so all runs are collected in one place
+LOGFILE_DEFAULT="${LOG_DIR}/blocklist.log"
 LOGFILE="${BLOCKLIST_LOGFILE:-$LOGFILE_DEFAULT}"
 
 mkdir -p "$LOG_DIR"
@@ -12,6 +13,7 @@ chmod 750 "$LOG_DIR" || true
 ts() { date "+%F %T%z"; }
 log() { echo "[$(ts)] $*"; }
 
+# Redirect all stdout/stderr to the unified logfile
 exec >>"$LOGFILE" 2>&1
 
 log "[*] ensure iptables/ip6tables DROP rules for ipsets"

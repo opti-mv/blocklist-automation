@@ -16,7 +16,8 @@ MAX_NAME_LEN=31   # Max. ipset-Name
 URL_FILE="${1:-}"
 
 LOG_DIR="/var/log/blocklist"
-LOGFILE_DEFAULT="${LOG_DIR}/blocklist_update_$(date +%F).log"
+# Use a single logfile for all scripts to simplify collection/rotation
+LOGFILE_DEFAULT="${LOG_DIR}/blocklist.log"
 LOGFILE="${BLOCKLIST_LOGFILE:-$LOGFILE_DEFAULT}"
 
 ########################################
@@ -28,6 +29,7 @@ chmod 750 "$LOG_DIR" || true
 ts() { date "+%F %T%z"; }
 log() { echo "[$(ts)] $*"; }
 
+# Redirect all stdout/stderr to the unified logfile
 exec >>"$LOGFILE" 2>&1
 
 TMPDIR="$(mktemp -d)"
