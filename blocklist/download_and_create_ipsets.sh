@@ -139,38 +139,70 @@ while IFS= read -r url; do
   log "[*] $count valid entries -> hashsize=$hashsize maxelem=$maxelem"
 
   if [[ "$nft_mode" -eq 1 ]]; then
-    # nftables-native: ensure table exists and create/flush set
+    # nftables-native: ensure table exists and create set if missing
     nft add table inet blocklist 2>/dev/null || true
-    if nft list set inet blocklist "$setname" >/dev/null 2>&1; then
-      log "[*] nft set exists -> flush: $setname"
-      nft flush set inet blocklist "$setname" 2>/dev/null || true
-    else
+    if ! nft list set inet blocklist "$setname" >/dev/null 2>&1; then
       log "[*] creating nft set $setname (type=$nft_type)"
       nft add set inet blocklist "$setname" "{ type $nft_type ; flags interval ; }" || true
+    else
+      log "[*] nft set exists -> flush: $setname"
+      nft flush set inet blocklist "$setname" 2>/dev/null || true
     fi
 
-    # add elements
-    for entry in "${entries[@]}"; do
-      if ! nft add element inet blocklist "$setname" "{ $entry }" 2>/dev/null; then
-        log "[!] nft add element failed for $entry"
+    # Batch insert elements to reduce number of nft calls
+    batch_size=${NFT_BATCH_SIZE:-1000}
+    total=${#entries[@]}
+    i=0
+    while (( i < total )); do
+      end=$(( i + batch_size ))
+      if (( end > total )); then end=$total; fi
+      # build comma-separated list
+      elems=""
+      for ((j=i;j<end;j++)); do
+        e=${entries[j]}
+        # ensure proper quoting for IPv6 addresses with slash
+        if [[ "$elems" == "" ]]; then
+          elems="$e"
+        else
+          elems+=" , $e"
+        fi
+      done
+      # use nft add element with a batch
+      if ! nft add element inet blocklist "$setname" "{ $elems }" 2>/dev/null; then
+        log "[!] nft add element batch failed for items $i..$((end-1))"
       fi
+      i=$end
     done
 
   else
-    if ipset list "$setname" &>/dev/null; then
-      log "[*] set exists -> flush"
-      ipset flush "$setname"
-    else
-      log "[*] creating set"
-      ipset create "$setname" hash:net family "$family" hashsize "$hashsize" maxelem "$maxelem"
-    fi
+    # ipset bulk update: create a temporary set, populate it via ipset restore, then swap/rename
+    tmp="${setname}_tmp_$$_$RANDOM"
+    # ensure tmp name fits within MAX_NAME_LEN
+    tmp=${tmp:0:$MAX_NAME_LEN}
+    log "[*] creating temporary ipset $tmp for bulk update"
+    ipset create "$tmp" hash:net family "$family" hashsize "$hashsize" maxelem "$maxelem" 2>/dev/null || true
 
-    for entry in "${entries[@]}"; do
-      if ! ipset add "$setname" "$entry"; then
-        log "[!] add failed for $entry (set may be full)"
-        break
+    # prepare restore content
+    restore_file="$TMPDIR/ipset_restore_$setname"
+    {
+      echo "create $tmp hash:net family $family hashsize $hashsize maxelem $maxelem"
+      for entry in "${entries[@]}"; do
+        echo "add $tmp $entry"
+      done
+    } > "$restore_file"
+
+    if ! ipset restore -f "$restore_file" 2>/dev/null; then
+      log "[!] ipset restore failed for $setname"
+    else
+      if ipset list "$setname" &>/dev/null; then
+        log "[*] swapping $tmp -> $setname"
+        ipset swap "$tmp" "$setname" 2>/dev/null || true
+        ipset destroy "$tmp" 2>/dev/null || true
+      else
+        log "[*] renaming $tmp -> $setname"
+        ipset rename "$tmp" "$setname" 2>/dev/null || true
       fi
-    done
+    fi
   fi
 
 done < "$URL_FILE"
