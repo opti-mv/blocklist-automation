@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 ## What it does
 
 - Installs required packages (Debian/Ubuntu via apt; best-effort)
-- Creates `/root/blocklist`
+- Creates `/opt/blocklist`
 - Downloads scripts + `blocklists.txt` from this repo
 - Creates `/var/log/blocklist` with safe permissions
 - Installs/updates a root crontab entry to refresh ipsets and ensure iptables/ip6tables DROP rules
@@ -28,4 +28,5 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 ## Notes / assumptions
 
 - Designed for hosts using `iptables`/`ip6tables` (not nftables-only).
+- Source of blocklist files: https://ipv64.net/v64_blocklists
 - Requires privileges to manage ipset + firewall rules (root).

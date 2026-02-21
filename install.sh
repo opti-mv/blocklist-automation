@@ -7,7 +7,7 @@ set -Eeuo pipefail
 REPO_RAW_BASE_DEFAULT="https://raw.githubusercontent.com/opti-mv/blocklist-automation/main"
 REPO_RAW_BASE="${REPO_RAW_BASE:-$REPO_RAW_BASE_DEFAULT}"
 
-DEST_DIR_DEFAULT="/root/blocklist"
+DEST_DIR_DEFAULT="/opt/blocklist"
 DEST_DIR="${DEST_DIR:-$DEST_DIR_DEFAULT}"
 
 CRON_SCHEDULE_DEFAULT="36 * * * *"
