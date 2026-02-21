@@ -34,6 +34,14 @@ Logging and rotation
 - All scripts write to `/var/log/blocklist/blocklist.log` by default. To override per-run, set the
   `BLOCKLIST_LOGFILE` environment variable before running the scripts.
 
+nftables support
+- The scripts now auto-detect whether to use traditional `ipset`+`iptables` or native `nftables`.
+  - Default detection: prefer `ipset` if present; otherwise use `nft`.
+  - To force behavior, set `USE_NFT=1` (force nft mode) or `USE_NFT=0` (force ipset mode) in the
+    environment before running the scripts.
+- When operating in nft mode the downloader creates `nft` sets under table `inet blocklist` and the
+  rules installer adds matching drop rules into the `inet blocklist` table's `input` chain.
+
 ## Notes / assumptions
 
 - Designed for hosts using `iptables`/`ip6tables` (not nftables-only).
