@@ -1,0 +1,10 @@
+MAILTO=""
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Backups (logging handled inside scripts -> /var/log/backup/*.log)
+30 4 * * * /usr/local/sbin/backup_cloud_crazynet.sh
+30 11 * * * /usr/local/sbin/backup_localhost.sh
+
+# Blocklist (logfile per day)
+36 * * * * cd /root/blocklist && ./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh >> /var/log/blocklist/blocklist_$(date +\%F).log 2>&1
