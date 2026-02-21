@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 - Creates `/opt/blocklist`
 - Downloads scripts + `blocklists.txt` from this repo
 - Creates `/var/log/blocklist` with safe permissions
-- Installs/updates a root crontab entry to refresh ipsets and ensure iptables/ip6tables DROP rules
+- Installs/updates a managed root crontab block to refresh lists/sets and ensure DROP rules
 
 - Collects all script output into a single logfile `/var/log/blocklist/blocklist.log` and configures
   `logrotate` to rotate/compress logs (managed by `install.sh`). The crontab entry is updated to
@@ -36,15 +36,22 @@ Logging and rotation
 
 nftables support
 - The scripts now auto-detect whether to use traditional `ipset`+`iptables` or native `nftables`.
-  - Default detection: prefer `ipset` if present; otherwise use `nft`.
+  - Default detection: prefer `ipset` when `ipset`+`iptables` are available; otherwise use `nft`.
   - To force behavior, set `USE_NFT=1` (force nft mode) or `USE_NFT=0` (force ipset mode) in the
     environment before running the scripts.
-- When operating in nft mode the downloader creates `nft` sets under table `inet blocklist` and the
-  rules installer adds matching drop rules into the `inet blocklist` table's `input` chain.
+- If no firewall backend is detected, the installer attempts to install `nftables` and scripts use nft mode.
+- To avoid collisions, blocklist sets are prefixed by default (`BLOCKLIST_SET_PREFIX=blklst_`).
+- In nft mode, sets/rules are managed in `inet blocklist_auto` (`BLOCKLIST_NFT_TABLE`) and chain
+  `input_blocklist` (`BLOCKLIST_NFT_CHAIN`).
+
+Cron behavior
+- Existing root crontab entries are preserved.
+- A managed block for this project is added/updated.
+- Default schedule is hourly at a host-randomized minute; override with `CRON_SCHEDULE`.
 
 ## Notes / assumptions
 
-- Designed for hosts using `iptables`/`ip6tables` (not nftables-only).
+- Designed for hosts with either `nftables` or `ipset`+`iptables`/`ip6tables`.
 - Source of blocklist files: https://ipv64.net/v64_blocklists
   - Hint: The source provides additional blocklists and also GeoBlocklists. If you want to use them, add the corresponding URLs to `blocklist/blocklists.txt` (and re-run the installer or wait for the next cron run).
-- Requires privileges to manage ipset + firewall rules (root).
+- Requires privileges to manage firewall sets/rules (root).

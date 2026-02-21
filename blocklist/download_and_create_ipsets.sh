@@ -14,6 +14,8 @@ set -Eeuo pipefail
 FACTOR=8          # Max elements = COUNT * FACTOR
 MAX_NAME_LEN=31   # Max. ipset-Name
 URL_FILE="${1:-}"
+SET_PREFIX="${BLOCKLIST_SET_PREFIX:-blklst_}"
+NFT_TABLE="${BLOCKLIST_NFT_TABLE:-blocklist_auto}"
 
 LOG_DIR="/var/log/blocklist"
 # Use a single logfile for all scripts to simplify collection/rotation
@@ -59,15 +61,33 @@ next_pow2() {
   done
   echo "$p"
 }
+sanitize_set_base() {
+  local input="$1"
+  local cleaned
+  cleaned="$(printf '%s' "$input" | tr -c '[:alnum:]_' '_' | tr '[:upper:]' '[:lower:]')"
+  while [[ "$cleaned" == _* ]]; do cleaned="${cleaned#_}"; done
+  while [[ "$cleaned" == *_ ]]; do cleaned="${cleaned%_}"; done
+  [[ -z "$cleaned" ]] && cleaned="set"
+  echo "$cleaned"
+}
+build_set_name() {
+  local base="$1"
+  local max_base_len=$((MAX_NAME_LEN - ${#SET_PREFIX}))
+  local safe_base
+  (( max_base_len > 0 )) || error "BLOCKLIST_SET_PREFIX too long for MAX_NAME_LEN=$MAX_NAME_LEN"
+  safe_base="$(sanitize_set_base "$base")"
+  echo "${SET_PREFIX}${safe_base:0:$max_base_len}"
+}
 
 ########################################
 # Validierung & Feature-detection
 ########################################
 [[ -z "$URL_FILE" ]] && error "Usage: $0 <url-list-file>"
-[[ ! -f "$URL_FILE" ]] && error "File  not found"
+[[ ! -f "$URL_FILE" ]] && error "File '$URL_FILE' not found"
 command -v curl  >/dev/null || error "curl not installed"
 
-# nft vs ipset selection: set USE_NFT=1 to force nft-mode, 0 to force ipset-mode, or auto-detect
+# nft vs ipset selection: set USE_NFT=1 to force nft-mode, 0 to force ipset-mode, or auto-detect.
+# Auto prefers ipset only when ipset+iptables are available; otherwise nft.
 USE_NFT="${USE_NFT:-auto}"
 detect_nft_mode() {
   if [[ "$USE_NFT" == "1" ]]; then
@@ -75,13 +95,14 @@ detect_nft_mode() {
   elif [[ "$USE_NFT" == "0" ]]; then
     nft_mode=0
   else
-    # auto: prefer ipset if available, otherwise use nft when present
-    if command -v ipset >/dev/null 2>&1; then
+    # auto: prefer ipset only when iptables is available as well.
+    # This keeps mode selection consistent with set-ipsets2drop.sh.
+    if command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
       nft_mode=0
     elif command -v nft >/dev/null 2>&1; then
       nft_mode=1
     else
-      error "neither ipset nor nft found"
+      nft_mode=1
     fi
   fi
 }
@@ -89,6 +110,7 @@ detect_nft_mode() {
 detect_nft_mode
 
 if [[ "$nft_mode" -eq 1 ]]; then
+  command -v nft >/dev/null || error "nft not installed (auto selected nft mode)"
   log "[*] operating in nftables-native mode"
 else
   command -v ipset >/dev/null || error "ipset not installed"
@@ -107,7 +129,7 @@ while IFS= read -r url; do
   fname="$(basename "$url")"
   base="${fname%.txt}"
   base="${base#blocklist_}"
-  setname="${base:0:$MAX_NAME_LEN}"
+  setname="$(build_set_name "$base")"
 
   if [[ "$base" == *_v6_* ]]; then
     family=inet6
@@ -119,7 +141,7 @@ while IFS= read -r url; do
     nft_type="ipv4_addr"
   fi
 
-  log "[*] processing: $fname -> ipset  ($family)"
+  log "[*] processing: $fname -> set=$setname ($family)"
 
   out_file="$TMPDIR/$fname"
   if ! curl -fsSL "$url" -o "$out_file"; then
@@ -140,13 +162,13 @@ while IFS= read -r url; do
 
   if [[ "$nft_mode" -eq 1 ]]; then
     # nftables-native: ensure table exists and create set if missing
-    nft add table inet blocklist 2>/dev/null || true
-    if ! nft list set inet blocklist "$setname" >/dev/null 2>&1; then
+    nft add table inet "$NFT_TABLE" 2>/dev/null || true
+    if ! nft list set inet "$NFT_TABLE" "$setname" >/dev/null 2>&1; then
       log "[*] creating nft set $setname (type=$nft_type)"
-      nft add set inet blocklist "$setname" "{ type $nft_type ; flags interval ; }" || true
+      nft add set inet "$NFT_TABLE" "$setname" "{ type $nft_type ; flags interval ; }" || true
     else
       log "[*] nft set exists -> flush: $setname"
-      nft flush set inet blocklist "$setname" 2>/dev/null || true
+      nft flush set inet "$NFT_TABLE" "$setname" 2>/dev/null || true
     fi
 
     # Batch insert elements to reduce number of nft calls
@@ -168,7 +190,7 @@ while IFS= read -r url; do
         fi
       done
       # use nft add element with a batch
-      if ! nft add element inet blocklist "$setname" "{ $elems }" 2>/dev/null; then
+      if ! nft add element inet "$NFT_TABLE" "$setname" "{ $elems }" 2>/dev/null; then
         log "[!] nft add element batch failed for items $i..$((end-1))"
       fi
       i=$end
@@ -180,7 +202,7 @@ while IFS= read -r url; do
     # ensure tmp name fits within MAX_NAME_LEN
     tmp=${tmp:0:$MAX_NAME_LEN}
     log "[*] creating temporary ipset $tmp for bulk update"
-    ipset create "$tmp" hash:net family "$family" hashsize "$hashsize" maxelem "$maxelem" 2>/dev/null || true
+    ipset destroy "$tmp" 2>/dev/null || true
 
     # prepare restore content
     restore_file="$TMPDIR/ipset_restore_$setname"
@@ -193,6 +215,7 @@ while IFS= read -r url; do
 
     if ! ipset restore -f "$restore_file" 2>/dev/null; then
       log "[!] ipset restore failed for $setname"
+      ipset destroy "$tmp" 2>/dev/null || true
     else
       if ipset list "$setname" &>/dev/null; then
         log "[*] swapping $tmp -> $setname"

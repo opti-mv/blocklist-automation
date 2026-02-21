@@ -10,9 +10,6 @@ REPO_RAW_BASE="${REPO_RAW_BASE:-$REPO_RAW_BASE_DEFAULT}"
 DEST_DIR_DEFAULT="/opt/blocklist"
 DEST_DIR="${DEST_DIR:-$DEST_DIR_DEFAULT}"
 
-CRON_SCHEDULE_DEFAULT="36 * * * *"
-CRON_SCHEDULE="${CRON_SCHEDULE:-$CRON_SCHEDULE_DEFAULT}"
-
 LOG_DIR="/var/log/blocklist"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -29,7 +26,7 @@ require_root() {
 
 install_packages_best_effort() {
   # Best-effort; supports Debian/Ubuntu via apt.
-  local pkgs=(curl ipset iptables)
+  local pkgs=(curl ipset iptables nftables)
 
   if need_cmd apt-get; then
     log "installing packages via apt: ${pkgs[*]}"
@@ -40,13 +37,40 @@ install_packages_best_effort() {
     log "no apt-get found; skipping package installation"
   fi
 
-  need_cmd curl  || die "curl not found"
-  need_cmd ipset || die "ipset not found"
-  need_cmd iptables || die "iptables not found"
-  # ip6tables may be absent on IPv4-only systems
-  if ! need_cmd ip6tables; then
-    log "note: ip6tables not found (IPv6 rules will be skipped)"
+  need_cmd curl || die "curl not found"
+
+  if need_cmd nft; then
+    log "nft found; nftables mode is available"
+  elif need_cmd ipset && need_cmd iptables; then
+    log "ipset+iptables found; legacy mode is available"
+    # ip6tables may be absent on IPv4-only systems
+    if ! need_cmd ip6tables; then
+      log "note: ip6tables not found (IPv6 rules will be skipped)"
+    fi
+  else
+    log "no firewall backend detected; attempting nftables fallback install"
+    if need_cmd apt-get; then
+      apt-get update -y || true
+      apt-get install -y nftables || true
+    elif need_cmd yum; then
+      yum install -y nftables || true
+    elif need_cmd apk; then
+      apk add --no-cache nftables || true
+    fi
+
+    need_cmd nft || die "no supported firewall backend found (need nft or ipset+iptables)"
+    log "nft installed; nftables mode will be used"
   fi
+}
+
+pick_random_minute() {
+  local minute
+  if [[ -r /etc/machine-id ]]; then
+    minute="$(cksum < /etc/machine-id | awk '{print $1 % 60}')"
+  else
+    minute="$(hostname | cksum | awk '{print $1 % 60}')"
+  fi
+  echo "$minute"
 }
 
 download_file() {
@@ -104,9 +128,20 @@ sync_blocklist_files() {
 }
 
 ensure_crontab() {
+  local schedule minute
   local cron_line
+  local marker_begin="# BEGIN blocklist-automation (managed)"
+  local marker_end="# END blocklist-automation (managed)"
+
+  if [[ -n "${CRON_SCHEDULE:-}" ]]; then
+    schedule="$CRON_SCHEDULE"
+  else
+    minute="$(pick_random_minute)"
+    schedule="${minute} * * * *"
+  fi
+
   # Run both scripts and append all output to the single unified logfile
-  cron_line="$CRON_SCHEDULE cd $DEST_DIR && (./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh) >> $LOG_DIR/blocklist.log 2>&1"
+  cron_line="$schedule cd $DEST_DIR && (./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh) >> $LOG_DIR/blocklist.log 2>&1"
 
   log "ensuring root crontab entry"
 
@@ -120,15 +155,22 @@ ensure_crontab() {
     : >"$tmp"
   fi
 
-  # Remove old lines we previously managed (anything containing /root/blocklist + the two scripts)
-  # Keep it conservative.
-  grep -vE "download_and_create_ipsets\.sh|set-ipsets2drop\.sh" "$tmp" >"$tmp.new" || true
+  # Keep existing user entries. Remove only our managed block (new and legacy marker).
+  awk -v begin="$marker_begin" -v end="$marker_end" '
+    $0 == begin { inblock=1; next }
+    $0 == end { inblock=0; next }
+    inblock != 1 { print }
+  ' "$tmp" \
+    | grep -vE "^[[:space:]]*# blocklist-automation \(managed\)[[:space:]]*$" \
+    | grep -vE "download_and_create_ipsets\.sh blocklists\.txt && \./set-ipsets2drop\.sh" \
+    >"$tmp.new" || true
 
   {
     cat "$tmp.new"
     echo ""
-    echo "# blocklist-automation (managed)"
+    echo "$marker_begin"
     echo "$cron_line"
+    echo "$marker_end"
   } >"$tmp.final"
 
   crontab "$tmp.final"

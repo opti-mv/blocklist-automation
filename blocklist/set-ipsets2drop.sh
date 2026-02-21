@@ -6,19 +6,42 @@ LOG_DIR="/var/log/blocklist"
 # Write to unified logfile so all runs are collected in one place
 LOGFILE_DEFAULT="${LOG_DIR}/blocklist.log"
 LOGFILE="${BLOCKLIST_LOGFILE:-$LOGFILE_DEFAULT}"
+MAX_NAME_LEN=31
+SET_PREFIX="${BLOCKLIST_SET_PREFIX:-blklst_}"
+NFT_TABLE="${BLOCKLIST_NFT_TABLE:-blocklist_auto}"
+NFT_CHAIN="${BLOCKLIST_NFT_CHAIN:-input_blocklist}"
+BLOCKLIST_DIR="${BLOCKLIST_DIR:-/opt/blocklist}"
+URL_FILE="$BLOCKLIST_DIR/blocklists.txt"
 
 mkdir -p "$LOG_DIR"
 chmod 750 "$LOG_DIR" || true
 
 ts() { date "+%F %T%z"; }
 log() { echo "[$(ts)] $*"; }
+sanitize_set_base() {
+  local input="$1"
+  local cleaned
+  cleaned="$(printf '%s' "$input" | tr -c '[:alnum:]_' '_' | tr '[:upper:]' '[:lower:]')"
+  while [[ "$cleaned" == _* ]]; do cleaned="${cleaned#_}"; done
+  while [[ "$cleaned" == *_ ]]; do cleaned="${cleaned%_}"; done
+  [[ -z "$cleaned" ]] && cleaned="set"
+  echo "$cleaned"
+}
+build_set_name() {
+  local base="$1"
+  local max_base_len=$((MAX_NAME_LEN - ${#SET_PREFIX}))
+  local safe_base
+  (( max_base_len > 0 )) || { log "ERROR: BLOCKLIST_SET_PREFIX too long"; exit 1; }
+  safe_base="$(sanitize_set_base "$base")"
+  echo "${SET_PREFIX}${safe_base:0:$max_base_len}"
+}
 
 # Redirect all stdout/stderr to the unified logfile
 exec >>"$LOGFILE" 2>&1
 
 log "[*] ensure firewall DROP rules for blocklists (ipset or nftables)"
 
-# Detect mode: if USE_NFT=1 => nft, 0 => iptables/ipset, auto => prefer ipset if present else nft
+# Detect mode: if USE_NFT=1 => nft, 0 => iptables/ipset, auto => prefer ipset+iptables else nft
 USE_NFT="${USE_NFT:-auto}"
 detect_nft_mode() {
   if [[ "$USE_NFT" == "1" ]]; then
@@ -26,13 +49,13 @@ detect_nft_mode() {
   elif [[ "$USE_NFT" == "0" ]]; then
     nft_mode=0
   else
-    if command -v ipset >/dev/null 2>&1; then
+    # auto: prefer ipset only when iptables is available as well.
+    if command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
       nft_mode=0
     elif command -v nft >/dev/null 2>&1; then
       nft_mode=1
     else
-      log "ERROR: neither ipset nor nft available"
-      exit 1
+      nft_mode=1
     fi
   fi
 }
@@ -41,39 +64,51 @@ detect_nft_mode
 
 if [[ "$nft_mode" -eq 0 ]]; then
   log "[*] using ipset + iptables path"
-  IPSET_SAVE="$(ipset save)"
-  for SET in $(ipset list -name); do
-    FAMILY=$(echo "$IPSET_SAVE" \
-      | grep -E "^create ${SET} " \
-      | awk -F"family " '{print $2}' \
-      | awk '{print $1}')
+  [[ -f "$URL_FILE" ]] || { log "WARNING: $URL_FILE not found — no managed sets to process"; exit 0; }
 
-    if [[ "$FAMILY" == "inet6" ]]; then
+  while IFS= read -r url; do
+    url="${url//[[:space:]]/}"
+    [[ -z "$url" || "$url" == \#* ]] && continue
+    fname="$(basename "$url")"
+    base="${fname%.txt}"
+    base="${base#blocklist_}"
+    setname="$(build_set_name "$base")"
+
+    if ! ipset list "$setname" >/dev/null 2>&1; then
+      log "  set not found (skipped): $setname"
+      continue
+    fi
+
+    if [[ "$base" == *_v6_* ]]; then
       IPT_CMD="ip6tables"
     else
       IPT_CMD="iptables"
     fi
 
-    log "[] check DROP rule for ipset $SET"
+    if ! command -v "$IPT_CMD" >/dev/null 2>&1; then
+      log "  command not found (skipped): $IPT_CMD for set $setname"
+      continue
+    fi
 
-    if $IPT_CMD -C INPUT -m set --match-set "$SET" src -j DROP 2>/dev/null; then
+    log "[] check DROP rule for ipset $setname"
+
+    if $IPT_CMD -C INPUT -m set --match-set "$setname" src -j DROP 2>/dev/null; then
       log "  rule exists"
     else
       log "  inserting rule"
-      $IPT_CMD -I INPUT -m set --match-set "$SET" src -j DROP
+      $IPT_CMD -I INPUT -m set --match-set "$setname" src -j DROP
     fi
-  done
+  done < "$URL_FILE"
 
 else
   log "[*] using nftables-native path"
+  command -v nft >/dev/null || { log "ERROR: nft not installed (auto selected nft mode)"; exit 1; }
   # Ensure table and chain exist
-  nft add table inet blocklist 2>/dev/null || true
-  nft list chain inet blocklist input >/dev/null 2>&1 || \
-    nft add chain inet blocklist input '{ type filter hook input priority 0; }'
+  nft add table inet "$NFT_TABLE" 2>/dev/null || true
+  nft list chain inet "$NFT_TABLE" "$NFT_CHAIN" >/dev/null 2>&1 || \
+    nft add chain inet "$NFT_TABLE" "$NFT_CHAIN" '{ type filter hook input priority 0; }'
 
   # Use blocklists file when available to derive set names (same naming logic as downloader)
-  BLOCKLIST_DIR="${BLOCKLIST_DIR:-/opt/blocklist}"
-  URL_FILE="$BLOCKLIST_DIR/blocklists.txt"
   if [[ -f "$URL_FILE" ]]; then
     while IFS= read -r url; do
       url="${url//[[:space:]]/}"
@@ -81,25 +116,22 @@ else
       fname="$(basename "$url")"
       base="${fname%.txt}"
       base="${base#blocklist_}"
-      setname="${base:0:31}"
+      setname="$(build_set_name "$base")"
 
       # Detect set type by naming convention used in downloader
       if [[ "$base" == *_v6_* ]]; then
-        expr_type="ip6 saddr @${setname} drop"
-        check_cmd="nft list ruleset | grep -F \"ip6 saddr @${setname}\" || true"
-      else
-        expr_type="ip saddr @${setname} drop"
-        check_cmd="nft list ruleset | grep -F \"ip saddr @${setname}\" || true"
-      fi
-
-      if eval "$check_cmd" | grep -q .; then
-        log "  nft rule exists for set $setname"
-      else
-        log "  adding nft rule for set $setname"
-        if [[ "$base" == *_v6_* ]]; then
-          nft add rule inet blocklist input ip6 saddr @${setname} drop || true
+        if nft list chain inet "$NFT_TABLE" "$NFT_CHAIN" 2>/dev/null | grep -F "ip6 saddr @${setname}" >/dev/null; then
+          log "  nft rule exists for set $setname"
         else
-          nft add rule inet blocklist input ip saddr @${setname} drop || true
+          log "  adding nft rule for set $setname"
+          nft add rule inet "$NFT_TABLE" "$NFT_CHAIN" ip6 saddr @${setname} drop || true
+        fi
+      else
+        if nft list chain inet "$NFT_TABLE" "$NFT_CHAIN" 2>/dev/null | grep -F "ip saddr @${setname}" >/dev/null; then
+          log "  nft rule exists for set $setname"
+        else
+          log "  adding nft rule for set $setname"
+          nft add rule inet "$NFT_TABLE" "$NFT_CHAIN" ip saddr @${setname} drop || true
         fi
       fi
     done < "$URL_FILE"
