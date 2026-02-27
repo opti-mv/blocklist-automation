@@ -30,7 +30,7 @@ require_root() {
 
 install_packages_best_effort() {
   # Best-effort; supports Debian/Ubuntu via apt.
-  local pkgs=(curl ipset iptables nftables)
+  local pkgs=(curl ipset iptables)
 
   if need_cmd apt-get; then
     log "installing packages via apt: ${pkgs[*]}"
@@ -43,16 +43,49 @@ install_packages_best_effort() {
 
   need_cmd curl || die "curl not found"
 
-  if need_cmd nft; then
-    log "nft found; nftables mode is available"
-  elif need_cmd ipset && need_cmd iptables; then
+  if need_cmd ipset && need_cmd iptables; then
     log "ipset+iptables found; legacy mode is available"
     # ip6tables may be absent on IPv4-only systems
     if ! need_cmd ip6tables; then
       log "note: ip6tables not found (IPv6 rules will be skipped)"
     fi
+  elif need_cmd iptables && ! need_cmd ipset; then
+    log "iptables found but ipset missing; attempting to install ipset"
+    if need_cmd apt-get; then
+      apt-get update -y || true
+      apt-get install -y ipset || true
+    elif need_cmd yum; then
+      yum install -y ipset || true
+    elif need_cmd apk; then
+      apk add --no-cache ipset || true
+    fi
+
+    if need_cmd ipset; then
+      log "ipset installed; legacy mode is available"
+    elif need_cmd nft; then
+      log "ipset install failed; falling back to existing nftables backend"
+    else
+      die "iptables found but ipset unavailable; no supported backend usable"
+    fi
+  elif need_cmd nft; then
+    log "nft found; nftables mode is available"
   else
-    log "no firewall backend detected; attempting nftables fallback install"
+    log "no firewall backend detected; attempting legacy backend install first"
+    if need_cmd apt-get; then
+      apt-get update -y || true
+      apt-get install -y ipset iptables || true
+    elif need_cmd yum; then
+      yum install -y ipset iptables || true
+    elif need_cmd apk; then
+      apk add --no-cache ipset iptables || true
+    fi
+
+    if need_cmd ipset && need_cmd iptables; then
+      log "ipset+iptables installed; legacy mode will be used"
+      return 0
+    fi
+
+    log "legacy backend unavailable; attempting nftables fallback install"
     if need_cmd apt-get; then
       apt-get update -y || true
       apt-get install -y nftables || true
@@ -62,7 +95,7 @@ install_packages_best_effort() {
       apk add --no-cache nftables || true
     fi
 
-    need_cmd nft || die "no supported firewall backend found (need nft or ipset+iptables)"
+    need_cmd nft || die "no supported firewall backend found (need ipset+iptables or nft)"
     log "nft installed; nftables mode will be used"
   fi
 }

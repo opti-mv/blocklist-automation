@@ -43,7 +43,7 @@ nftables support
   - Default detection: prefer `ipset` when `ipset`+`iptables` are available; otherwise use `nft`.
   - To force behavior, set `USE_NFT=1` (force nft mode) or `USE_NFT=0` (force ipset mode) in the
     environment before running the scripts.
-- If no firewall backend is detected, the installer attempts to install `nftables` and scripts use nft mode.
+- The installer prefers legacy backend (`ipset`+`iptables`) and only falls back to installing/using `nftables` when legacy backend is unavailable.
 - To avoid collisions, blocklist sets are prefixed by default (`BLOCKLIST_SET_PREFIX=blklst_`).
 - In nft mode, sets/rules are managed in `inet blocklist_auto` (`BLOCKLIST_NFT_TABLE`) and chain
   `input_blocklist` (`BLOCKLIST_NFT_CHAIN`).

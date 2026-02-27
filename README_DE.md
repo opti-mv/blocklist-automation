@@ -43,7 +43,7 @@ nftables-Unterstuetzung
   - Standard-Erkennung: bevorzuge `ipset`, wenn `ipset`+`iptables` verfuegbar sind; sonst `nft`.
   - Zum Erzwingen: `USE_NFT=1` (nft-Modus erzwingen) oder `USE_NFT=0` (ipset-Modus erzwingen) in der
     Umgebung vor dem Skriptstart setzen.
-- Wenn kein Firewall-Backend erkannt wird, versucht der Installer `nftables` zu installieren und nutzt danach den nft-Modus.
+- Der Installer bevorzugt den Legacy-Stack (`ipset`+`iptables`) und faellt nur dann auf `nftables` zurueck, wenn der Legacy-Stack nicht verfuegbar ist.
 - Zur Kollisionsvermeidung bekommen Blocklist-Sets standardmaessig ein Praefix (`BLOCKLIST_SET_PREFIX=blklst_`).
 - Im nft-Modus werden Sets/Regeln in `inet blocklist_auto` (`BLOCKLIST_NFT_TABLE`) und Chain
   `input_blocklist` (`BLOCKLIST_NFT_CHAIN`) verwaltet.
