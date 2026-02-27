@@ -52,10 +52,14 @@ Allowlist-Unterstuetzung
 - Vertraute IPs/CIDRs in `/opt/blocklist/allowlist.txt` eintragen (oder `BLOCKLIST_ALLOWLIST_FILE` setzen).
 - Passende Eintraege werden vor dem Set-Update aus allen heruntergeladenen Blocklists entfernt.
 
+Hash-basierte Updates
+- Das Download-Skript speichert pro Set einen SHA-256-Hash in `/var/lib/blocklist` (uebersteuerbar mit `BLOCKLIST_STATE_DIR`).
+- Sets werden nur dann aktualisiert, wenn sich die final normalisierten Eintraege wirklich geaendert haben.
+
 Cron-Verhalten
 - Wenn systemd nicht verfuegbar ist, bleiben vorhandene root-Crontab-Eintraege erhalten, und es wird nur ein verwalteter Block hinzugefuegt/aktualisiert.
-- Der Cron-Fallback laeuft stuendlich zu einer host-randomisierten Minute; mit `CRON_SCHEDULE` ueberschreibbar.
-- Mit systemd laeuft der Timer stuendlich mit randomisierter Verzoegerung (`RandomizedDelaySec=59m`).
+- Der Cron-Fallback laeuft zwei Mal taeglich (`*/12`) zu einer host-randomisierten Minute; mit `CRON_SCHEDULE` ueberschreibbar.
+- Mit systemd laeuft der Timer um 00:00 und 12:00 mit randomisierter Verzoegerung (`RandomizedDelaySec=30m`).
 
 ## Hinweise / Annahmen
 

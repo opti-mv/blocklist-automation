@@ -180,7 +180,7 @@ ensure_crontab() {
     schedule="$CRON_SCHEDULE"
   else
     minute="$(pick_random_minute)"
-    schedule="${minute} * * * *"
+    schedule="${minute} */12 * * *"
   fi
 
   # Run both scripts and append all output to the single unified logfile
@@ -236,11 +236,11 @@ EOF
 
   cat > "$SYSTEMD_TIMER_PATH" <<'EOF'
 [Unit]
-Description=Run blocklist automation hourly at randomized minute
+Description=Run blocklist automation twice daily at randomized delay
 
 [Timer]
-OnCalendar=hourly
-RandomizedDelaySec=59m
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=30m
 Persistent=true
 
 [Install]

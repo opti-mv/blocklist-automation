@@ -52,10 +52,14 @@ Allowlist support
 - Place trusted IPs/CIDRs in `/opt/blocklist/allowlist.txt` (or set `BLOCKLIST_ALLOWLIST_FILE`).
 - Matching entries are removed from all downloaded blocklists before sets are updated.
 
+Hash-based updates
+- The downloader stores a SHA-256 hash per managed set in `/var/lib/blocklist` (override with `BLOCKLIST_STATE_DIR`).
+- Sets are only updated when the final normalized entries actually changed.
+
 Cron behavior
 - If systemd is unavailable, existing root crontab entries are preserved and only a managed block is added/updated.
-- Cron fallback schedule is hourly at a host-randomized minute; override with `CRON_SCHEDULE`.
-- With systemd, the timer runs hourly with randomized delay (`RandomizedDelaySec=59m`).
+- Cron fallback schedule is twice daily (`*/12`) at a host-randomized minute; override with `CRON_SCHEDULE`.
+- With systemd, the timer runs at 00:00 and 12:00 with randomized delay (`RandomizedDelaySec=30m`).
 
 ## Notes / assumptions
 

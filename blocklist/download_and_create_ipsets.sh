@@ -23,12 +23,16 @@ LOG_DIR="/var/log/blocklist"
 # Use a single logfile for all scripts to simplify collection/rotation
 LOGFILE_DEFAULT="${LOG_DIR}/blocklist.log"
 LOGFILE="${BLOCKLIST_LOGFILE:-$LOGFILE_DEFAULT}"
+STATE_DIR_DEFAULT="/var/lib/blocklist"
+STATE_DIR="${BLOCKLIST_STATE_DIR:-$STATE_DIR_DEFAULT}"
 
 ########################################
 # Logging
 ########################################
 mkdir -p "$LOG_DIR"
 chmod 750 "$LOG_DIR" || true
+mkdir -p "$STATE_DIR"
+chmod 750 "$STATE_DIR" || true
 
 ts() { date "+%F %T%z"; }
 log() { echo "[$(ts)] $*"; }
@@ -80,6 +84,14 @@ build_set_name() {
   safe_base="$(sanitize_set_base "$base")"
   echo "${SET_PREFIX}${safe_base:0:$max_base_len}"
 }
+set_hash_file() {
+  local setname="$1"
+  echo "$STATE_DIR/sethash_${setname}.sha256"
+}
+hash_entries() {
+  local entries_file="$1"
+  sha256sum "$entries_file" | awk '{print $1}'
+}
 
 ########################################
 # Validierung & Feature-detection
@@ -87,6 +99,7 @@ build_set_name() {
 [[ -z "$URL_FILE" ]] && error "Usage: $0 <url-list-file>"
 [[ ! -f "$URL_FILE" ]] && error "File '$URL_FILE' not found"
 command -v curl  >/dev/null || error "curl not installed"
+command -v sha256sum >/dev/null || error "sha256sum not installed"
 
 ALLOWLIST_NORM_FILE="$TMPDIR/allowlist.norm"
 if [[ -f "$ALLOWLIST_FILE" ]]; then
@@ -182,6 +195,19 @@ while IFS= read -r url; do
     continue
   fi
 
+  entries_file="$TMPDIR/entries_${setname}.final"
+  printf "%s\n" "${entries[@]}" > "$entries_file"
+  current_hash="$(hash_entries "$entries_file")"
+  hash_file="$(set_hash_file "$setname")"
+  previous_hash=""
+  if [[ -f "$hash_file" ]]; then
+    previous_hash="$(tr -d '[:space:]' < "$hash_file")"
+  fi
+  if [[ -n "$previous_hash" && "$previous_hash" == "$current_hash" ]]; then
+    log "[*] no changes for $setname (hash=$current_hash) -> skip update"
+    continue
+  fi
+
   maxelem=$(( count * FACTOR ))
   hashsize=$(next_pow2 "$maxelem")
   log "[*] $count valid entries -> hashsize=$hashsize maxelem=$maxelem"
@@ -221,6 +247,8 @@ while IFS= read -r url; do
       fi
       i=$end
     done
+    echo "$current_hash" > "$hash_file"
+    log "[*] updated hash for $setname"
 
   else
     # ipset bulk update: create a temporary set, populate it via ipset restore, then swap/rename
@@ -251,6 +279,8 @@ while IFS= read -r url; do
         log "[*] renaming $tmp -> $setname"
         ipset rename "$tmp" "$setname" 2>/dev/null || true
       fi
+      echo "$current_hash" > "$hash_file"
+      log "[*] updated hash for $setname"
     fi
   fi
 
