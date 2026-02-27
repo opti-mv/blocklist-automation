@@ -155,9 +155,8 @@ remove_files() {
 main() {
   require_root
 
-  local names_file
   names_file="$(mktemp)"
-  trap 'rm -f "$names_file" 2>/dev/null || true' EXIT
+  trap 'if [[ -n "${names_file:-}" ]]; then rm -f "$names_file" 2>/dev/null || true; fi' EXIT
 
   collect_set_names "$names_file"
   remove_systemd_units
