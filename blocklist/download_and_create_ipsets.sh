@@ -86,8 +86,7 @@ build_set_name() {
 }
 set_hash_file() {
   local setname="$1"
-  local backend="$2"
-  echo "$STATE_DIR/sethash_${backend}_${setname}.sha256"
+  echo "$STATE_DIR/sethash_${setname}.sha256"
 }
 hash_entries() {
   local entries_file="$1"
@@ -199,29 +198,14 @@ while IFS= read -r url; do
   entries_file="$TMPDIR/entries_${setname}.final"
   printf "%s\n" "${entries[@]}" > "$entries_file"
   current_hash="$(hash_entries "$entries_file")"
-  backend_name="ipset"
-  if [[ "$nft_mode" -eq 1 ]]; then
-    backend_name="nft"
-  fi
-  hash_file="$(set_hash_file "$setname" "$backend_name")"
+  hash_file="$(set_hash_file "$setname")"
   previous_hash=""
   if [[ -f "$hash_file" ]]; then
     previous_hash="$(tr -d '[:space:]' < "$hash_file")"
   fi
   if [[ -n "$previous_hash" && "$previous_hash" == "$current_hash" ]]; then
-    if [[ "$nft_mode" -eq 1 ]]; then
-      if nft list set inet "$NFT_TABLE" "$setname" >/dev/null 2>&1; then
-        log "[*] no changes for $setname (hash=$current_hash) -> skip update"
-        continue
-      fi
-      log "[*] hash unchanged but nft set missing for $setname -> recreate"
-    else
-      if ipset list "$setname" >/dev/null 2>&1; then
-        log "[*] no changes for $setname (hash=$current_hash) -> skip update"
-        continue
-      fi
-      log "[*] hash unchanged but ipset missing for $setname -> recreate"
-    fi
+    log "[*] no changes for $setname (hash=$current_hash) -> skip update"
+    continue
   fi
 
   maxelem=$(( count * FACTOR ))

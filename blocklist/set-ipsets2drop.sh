@@ -62,11 +62,6 @@ detect_nft_mode() {
 
 detect_nft_mode
 
-rules_added=0
-rules_existing=0
-rules_failed=0
-sets_missing=0
-
 if [[ "$nft_mode" -eq 0 ]]; then
   log "[*] using ipset + iptables path"
   [[ -f "$URL_FILE" ]] || { log "WARNING: $URL_FILE not found — no managed sets to process"; exit 0; }
@@ -81,7 +76,6 @@ if [[ "$nft_mode" -eq 0 ]]; then
 
     if ! ipset list "$setname" >/dev/null 2>&1; then
       log "  set not found (skipped): $setname"
-      sets_missing=$((sets_missing + 1))
       continue
     fi
 
@@ -100,15 +94,9 @@ if [[ "$nft_mode" -eq 0 ]]; then
 
     if $IPT_CMD -C INPUT -m set --match-set "$setname" src -j DROP 2>/dev/null; then
       log "  rule exists"
-      rules_existing=$((rules_existing + 1))
     else
       log "  inserting rule"
-      if $IPT_CMD -I INPUT -m set --match-set "$setname" src -j DROP 2>/dev/null; then
-        rules_added=$((rules_added + 1))
-      else
-        log "  failed to insert rule for $setname via $IPT_CMD"
-        rules_failed=$((rules_failed + 1))
-      fi
+      $IPT_CMD -I INPUT -m set --match-set "$setname" src -j DROP
     fi
   done < "$URL_FILE"
 
@@ -153,6 +141,3 @@ else
 fi
 
 log "[✓] firewall rules checked/ensured"
-if [[ "$nft_mode" -eq 0 ]]; then
-  log "[*] summary: existing=$rules_existing added=$rules_added failed=$rules_failed sets_missing=$sets_missing"
-fi

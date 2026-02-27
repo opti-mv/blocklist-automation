@@ -29,22 +29,14 @@ require_root() {
 }
 
 install_packages_best_effort() {
-  # Best-effort package install; install only missing tools.
-  local missing_pkgs=()
+  # Best-effort; supports Debian/Ubuntu via apt.
+  local pkgs=(curl ipset iptables)
 
   if need_cmd apt-get; then
-    if ! need_cmd curl; then missing_pkgs+=(curl); fi
-    if ! need_cmd ipset; then missing_pkgs+=(ipset); fi
-    if ! need_cmd iptables; then missing_pkgs+=(iptables); fi
-
-    if (( ${#missing_pkgs[@]} > 0 )); then
-      log "installing missing packages via apt: ${missing_pkgs[*]}"
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update -y || true
-      apt-get install -y "${missing_pkgs[@]}" || true
-    else
-      log "all required legacy packages already present (curl/ipset/iptables)"
-    fi
+    log "installing packages via apt: ${pkgs[*]}"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y || true
+    apt-get install -y "${pkgs[@]}" || true
   else
     log "no apt-get found; skipping package installation"
   fi
@@ -70,8 +62,10 @@ install_packages_best_effort() {
 
     if need_cmd ipset; then
       log "ipset installed; legacy mode is available"
+    elif need_cmd nft; then
+      log "ipset install failed; falling back to existing nftables backend"
     else
-      die "iptables found but ipset unavailable; refusing nft fallback by policy"
+      die "iptables found but ipset unavailable; no supported backend usable"
     fi
   elif need_cmd nft; then
     log "nft found; nftables mode is available"
