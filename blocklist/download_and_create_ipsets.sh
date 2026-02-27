@@ -36,9 +36,28 @@ chmod 750 "$STATE_DIR" || true
 
 ts() { date "+%F %T%z"; }
 log() { echo "[$(ts)] $*"; }
+require_root() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    echo "[blocklist] ERROR: must run as root (sudo)" >&2
+    exit 1
+  fi
+}
+init_logging() {
+  local fallback_log="/tmp/blocklist.log"
+  if touch "$LOGFILE" 2>/dev/null; then
+    exec >>"$LOGFILE" 2>&1
+  elif touch "$fallback_log" 2>/dev/null; then
+    LOGFILE="$fallback_log"
+    exec >>"$LOGFILE" 2>&1
+    log "[!] cannot write default logfile; using fallback: $LOGFILE"
+  else
+    echo "[blocklist] ERROR: cannot open logfile '$LOGFILE' or fallback '$fallback_log'" >&2
+    exit 1
+  fi
+}
 
-# Redirect all stdout/stderr to the unified logfile
-exec >>"$LOGFILE" 2>&1
+require_root
+init_logging
 
 TMPDIR="$(mktemp -d)"
 cleanup() {

@@ -18,6 +18,25 @@ chmod 750 "$LOG_DIR" || true
 
 ts() { date "+%F %T%z"; }
 log() { echo "[$(ts)] $*"; }
+require_root() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    echo "[blocklist] ERROR: must run as root (sudo)" >&2
+    exit 1
+  fi
+}
+init_logging() {
+  local fallback_log="/tmp/blocklist.log"
+  if touch "$LOGFILE" 2>/dev/null; then
+    exec >>"$LOGFILE" 2>&1
+  elif touch "$fallback_log" 2>/dev/null; then
+    LOGFILE="$fallback_log"
+    exec >>"$LOGFILE" 2>&1
+    log "[!] cannot write default logfile; using fallback: $LOGFILE"
+  else
+    echo "[blocklist] ERROR: cannot open logfile '$LOGFILE' or fallback '$fallback_log'" >&2
+    exit 1
+  fi
+}
 sanitize_set_base() {
   local input="$1"
   local cleaned
@@ -40,8 +59,8 @@ iptables_uses_nft_backend() {
   iptables -V 2>/dev/null | grep -qi "nf_tables"
 }
 
-# Redirect all stdout/stderr to the unified logfile
-exec >>"$LOGFILE" 2>&1
+require_root
+init_logging
 
 log "[*] ensure firewall DROP rules for blocklists (ipset or nftables)"
 
@@ -76,7 +95,16 @@ detect_nft_mode
 
 if [[ "$nft_mode" -eq 0 ]]; then
   log "[*] using ipset + iptables path${mode_reason:+ ($mode_reason)}"
-  [[ -f "$URL_FILE" ]] || { log "WARNING: $URL_FILE not found — no managed sets to process"; exit 0; }
+  if [[ ! -f "$URL_FILE" ]]; then
+    alt_url_file="$(dirname "$0")/blocklists.txt"
+    if [[ -f "$alt_url_file" ]]; then
+      URL_FILE="$alt_url_file"
+      log "[*] using local blocklists file: $URL_FILE"
+    else
+      log "WARNING: $URL_FILE not found — no managed sets to process"
+      exit 0
+    fi
+  fi
 
   while IFS= read -r url; do
     url="${url//[[:space:]]/}"
@@ -129,6 +157,14 @@ else
     nft add chain inet "$NFT_TABLE" "$NFT_CHAIN" '{ type filter hook input priority 0; }'
 
   # Use blocklists file when available to derive set names (same naming logic as downloader)
+  if [[ ! -f "$URL_FILE" ]]; then
+    alt_url_file="$(dirname "$0")/blocklists.txt"
+    if [[ -f "$alt_url_file" ]]; then
+      URL_FILE="$alt_url_file"
+      log "[*] using local blocklists file: $URL_FILE"
+    fi
+  fi
+
   if [[ -f "$URL_FILE" ]]; then
     while IFS= read -r url; do
       url="${url//[[:space:]]/}"
