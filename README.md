@@ -19,6 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 - Installs a scheduler:
   - systemd timer when available
   - cron fallback otherwise
+- Runs one initial update immediately during installation (does not wait for first timer/cron slot).
 
 - Collects all script output into a single logfile `/var/log/blocklist/blocklist.log` and configures
   `logrotate` to rotate/compress logs (managed by `install.sh`). The installed scheduler

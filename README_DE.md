@@ -19,6 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/opti-mv/blocklist-automation/main/i
 - Richtet einen Scheduler ein:
   - systemd-Timer, wenn verfuegbar
   - sonst Cron-Fallback
+- Fuehrt waehrend der Installation sofort einen initialen Lauf aus (wartet nicht auf das erste Timer/Cron-Zeitfenster).
 
 - Fuehrt alle Skriptausgaben in einer Logdatei zusammen: `/var/log/blocklist/blocklist.log`, und konfiguriert
   `logrotate` fuer Rotation/Komprimierung (verwaltet durch `install.sh`). Der eingerichtete Scheduler

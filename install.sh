@@ -303,6 +303,16 @@ ensure_scheduler() {
   fi
 }
 
+run_initial_update() {
+  log "running initial update now"
+  (
+    cd "$DEST_DIR"
+    ./download_and_create_ipsets.sh blocklists.txt
+    ./set-ipsets2drop.sh
+  ) || die "initial update failed; check logs in /var/log/blocklist/blocklist.log (or /tmp/blocklist.log)"
+  log "initial update completed"
+}
+
 main() {
   require_root
   install_packages_best_effort
@@ -310,8 +320,8 @@ main() {
   sync_blocklist_files
   configure_logrotate
   ensure_scheduler
+  run_initial_update
   log "done"
-  log "test run: cd $DEST_DIR && ./download_and_create_ipsets.sh blocklists.txt && ./set-ipsets2drop.sh"
 }
 
 main "$@"
