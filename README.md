@@ -39,11 +39,13 @@ Logging and rotation
   `BLOCKLIST_LOGFILE` environment variable before running the scripts.
 
 nftables support
-- The scripts now auto-detect whether to use traditional `ipset`+`iptables` or native `nftables`.
-  - Default detection: prefer `ipset` when `ipset`+`iptables` are available; otherwise use `nft`.
+- The scripts auto-detect backend priority in this order:
+  - `iptables-nft` + `ipset` (preferred)
+  - native `nftables`
+  - legacy `iptables` + `ipset` only as last fallback
   - To force behavior, set `USE_NFT=1` (force nft mode) or `USE_NFT=0` (force ipset mode) in the
     environment before running the scripts.
-- The installer prefers legacy backend (`ipset`+`iptables`) and only falls back to installing/using `nftables` when legacy backend is unavailable.
+- The installer first tries to provide `iptables-nft` + `ipset`; if unavailable it uses `nft`, and only falls back to legacy `iptables` + `ipset` when nft backends are not available/installable.
 - To avoid collisions, blocklist sets are prefixed by default (`BLOCKLIST_SET_PREFIX=blklst_`).
 - In nft mode, sets/rules are managed in `inet blocklist_auto` (`BLOCKLIST_NFT_TABLE`) and chain
   `input_blocklist` (`BLOCKLIST_NFT_CHAIN`).

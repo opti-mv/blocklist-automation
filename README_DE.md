@@ -39,11 +39,13 @@ Logging und Rotation
   `BLOCKLIST_LOGFILE` vor dem Ausfuehren der Skripte gesetzt werden.
 
 nftables-Unterstuetzung
-- Die Skripte erkennen automatisch, ob klassisches `ipset`+`iptables` oder natives `nftables` genutzt wird.
-  - Standard-Erkennung: bevorzuge `ipset`, wenn `ipset`+`iptables` verfuegbar sind; sonst `nft`.
+- Die Skripte erkennen automatisch den Backend-Pfad in folgender Prioritaet:
+  - `iptables-nft` + `ipset` (bevorzugt)
+  - natives `nftables`
+  - klassisches `iptables` + `ipset` nur als letzter Fallback
   - Zum Erzwingen: `USE_NFT=1` (nft-Modus erzwingen) oder `USE_NFT=0` (ipset-Modus erzwingen) in der
     Umgebung vor dem Skriptstart setzen.
-- Der Installer bevorzugt den Legacy-Stack (`ipset`+`iptables`) und faellt nur dann auf `nftables` zurueck, wenn der Legacy-Stack nicht verfuegbar ist.
+- Der Installer versucht zuerst `iptables-nft` + `ipset`; wenn das nicht verfuegbar/installierbar ist, wird `nft` genutzt, und nur als letzter Schritt auf klassisches `iptables` + `ipset` zurueckgefallen.
 - Zur Kollisionsvermeidung bekommen Blocklist-Sets standardmaessig ein Praefix (`BLOCKLIST_SET_PREFIX=blklst_`).
 - Im nft-Modus werden Sets/Regeln in `inet blocklist_auto` (`BLOCKLIST_NFT_TABLE`) und Chain
   `input_blocklist` (`BLOCKLIST_NFT_CHAIN`) verwaltet.

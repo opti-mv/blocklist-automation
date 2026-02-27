@@ -35,13 +35,20 @@ build_set_name() {
   safe_base="$(sanitize_set_base "$base")"
   echo "${SET_PREFIX}${safe_base:0:$max_base_len}"
 }
+iptables_uses_nft_backend() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  iptables -V 2>/dev/null | grep -qi "nf_tables"
+}
 
 # Redirect all stdout/stderr to the unified logfile
 exec >>"$LOGFILE" 2>&1
 
 log "[*] ensure firewall DROP rules for blocklists (ipset or nftables)"
 
-# Detect mode: if USE_NFT=1 => nft, 0 => iptables/ipset, auto => prefer ipset+iptables else nft
+# Backend selection:
+# - USE_NFT=1: force nft mode
+# - USE_NFT=0: force ipset+iptables mode
+# - auto (default): prefer iptables-nft+ipset, then nft-native, then legacy iptables+ipset fallback
 USE_NFT="${USE_NFT:-auto}"
 detect_nft_mode() {
   if [[ "$USE_NFT" == "1" ]]; then
@@ -49,13 +56,18 @@ detect_nft_mode() {
   elif [[ "$USE_NFT" == "0" ]]; then
     nft_mode=0
   else
-    # auto: prefer ipset only when iptables is available as well.
-    if command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
+    if command -v ipset >/dev/null 2>&1 && iptables_uses_nft_backend; then
       nft_mode=0
+      mode_reason="iptables-nft+ipset"
     elif command -v nft >/dev/null 2>&1; then
       nft_mode=1
+      mode_reason="nft-native"
+    elif command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
+      nft_mode=0
+      mode_reason="legacy iptables+ipset fallback"
     else
       nft_mode=1
+      mode_reason="auto-default to nft"
     fi
   fi
 }
@@ -63,7 +75,7 @@ detect_nft_mode() {
 detect_nft_mode
 
 if [[ "$nft_mode" -eq 0 ]]; then
-  log "[*] using ipset + iptables path"
+  log "[*] using ipset + iptables path${mode_reason:+ ($mode_reason)}"
   [[ -f "$URL_FILE" ]] || { log "WARNING: $URL_FILE not found — no managed sets to process"; exit 0; }
 
   while IFS= read -r url; do
@@ -75,8 +87,16 @@ if [[ "$nft_mode" -eq 0 ]]; then
     setname="$(build_set_name "$base")"
 
     if ! ipset list "$setname" >/dev/null 2>&1; then
-      log "  set not found (skipped): $setname"
-      continue
+      if [[ "$base" == *_v6_* ]]; then
+        set_family="inet6"
+      else
+        set_family="inet"
+      fi
+      log "  set not found, creating: $setname (family=$set_family)"
+      if ! ipset create "$setname" hash:net family "$set_family" hashsize 16384 maxelem 131072 -exist 2>/dev/null; then
+        log "  failed to create set (skipped): $setname"
+        continue
+      fi
     fi
 
     if [[ "$base" == *_v6_* ]]; then
@@ -101,7 +121,7 @@ if [[ "$nft_mode" -eq 0 ]]; then
   done < "$URL_FILE"
 
 else
-  log "[*] using nftables-native path"
+  log "[*] using nftables-native path${mode_reason:+ ($mode_reason)}"
   command -v nft >/dev/null || { log "ERROR: nft not installed (auto selected nft mode)"; exit 1; }
   # Ensure table and chain exist
   nft add table inet "$NFT_TABLE" 2>/dev/null || true

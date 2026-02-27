@@ -86,11 +86,16 @@ build_set_name() {
 }
 set_hash_file() {
   local setname="$1"
-  echo "$STATE_DIR/sethash_${setname}.sha256"
+  local backend="$2"
+  echo "$STATE_DIR/sethash_${backend}_${setname}.sha256"
 }
 hash_entries() {
   local entries_file="$1"
   sha256sum "$entries_file" | awk '{print $1}'
+}
+iptables_uses_nft_backend() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  iptables -V 2>/dev/null | grep -qi "nf_tables"
 }
 
 ########################################
@@ -112,8 +117,10 @@ else
   log "[*] allowlist not found (optional): $ALLOWLIST_FILE"
 fi
 
-# nft vs ipset selection: set USE_NFT=1 to force nft-mode, 0 to force ipset-mode, or auto-detect.
-# Auto prefers ipset only when ipset+iptables are available; otherwise nft.
+# Backend selection:
+# - USE_NFT=1: force nft mode
+# - USE_NFT=0: force ipset+iptables mode
+# - auto (default): prefer iptables-nft+ipset, then nft-native, then legacy iptables+ipset fallback
 USE_NFT="${USE_NFT:-auto}"
 detect_nft_mode() {
   if [[ "$USE_NFT" == "1" ]]; then
@@ -121,14 +128,18 @@ detect_nft_mode() {
   elif [[ "$USE_NFT" == "0" ]]; then
     nft_mode=0
   else
-    # auto: prefer ipset only when iptables is available as well.
-    # This keeps mode selection consistent with set-ipsets2drop.sh.
-    if command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
+    if command -v ipset >/dev/null 2>&1 && iptables_uses_nft_backend; then
       nft_mode=0
+      mode_reason="iptables-nft+ipset"
     elif command -v nft >/dev/null 2>&1; then
       nft_mode=1
+      mode_reason="nft-native"
+    elif command -v ipset >/dev/null 2>&1 && command -v iptables >/dev/null 2>&1; then
+      nft_mode=0
+      mode_reason="legacy iptables+ipset fallback"
     else
       nft_mode=1
+      mode_reason="auto-default to nft"
     fi
   fi
 }
@@ -137,10 +148,11 @@ detect_nft_mode
 
 if [[ "$nft_mode" -eq 1 ]]; then
   command -v nft >/dev/null || error "nft not installed (auto selected nft mode)"
-  log "[*] operating in nftables-native mode"
+  log "[*] operating in nftables-native mode${mode_reason:+ ($mode_reason)}"
 else
   command -v ipset >/dev/null || error "ipset not installed"
-  log "[*] operating in ipset mode"
+  command -v iptables >/dev/null || error "iptables not installed"
+  log "[*] operating in ipset mode${mode_reason:+ ($mode_reason)}"
 fi
 
 log "[*] temp dir: $TMPDIR"
@@ -198,14 +210,29 @@ while IFS= read -r url; do
   entries_file="$TMPDIR/entries_${setname}.final"
   printf "%s\n" "${entries[@]}" > "$entries_file"
   current_hash="$(hash_entries "$entries_file")"
-  hash_file="$(set_hash_file "$setname")"
+  backend_name="ipset"
+  if [[ "$nft_mode" -eq 1 ]]; then
+    backend_name="nft"
+  fi
+  hash_file="$(set_hash_file "$setname" "$backend_name")"
   previous_hash=""
   if [[ -f "$hash_file" ]]; then
     previous_hash="$(tr -d '[:space:]' < "$hash_file")"
   fi
   if [[ -n "$previous_hash" && "$previous_hash" == "$current_hash" ]]; then
-    log "[*] no changes for $setname (hash=$current_hash) -> skip update"
-    continue
+    if [[ "$nft_mode" -eq 1 ]]; then
+      if nft list set inet "$NFT_TABLE" "$setname" >/dev/null 2>&1; then
+        log "[*] no changes for $setname (hash=$current_hash) -> skip update"
+        continue
+      fi
+      log "[*] hash unchanged but nft set missing for $setname -> recreate"
+    else
+      if ipset list "$setname" >/dev/null 2>&1; then
+        log "[*] no changes for $setname (hash=$current_hash) -> skip update"
+        continue
+      fi
+      log "[*] hash unchanged but ipset missing for $setname -> recreate"
+    fi
   fi
 
   maxelem=$(( count * FACTOR ))

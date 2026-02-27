@@ -28,76 +28,84 @@ require_root() {
   fi
 }
 
-install_packages_best_effort() {
-  # Best-effort; supports Debian/Ubuntu via apt.
-  local pkgs=(curl ipset iptables)
+iptables_uses_nft_backend() {
+  need_cmd iptables || return 1
+  iptables -V 2>/dev/null | grep -qi "nf_tables"
+}
+
+install_pkgs_best_effort() {
+  local pkgs=("$@")
+  (( ${#pkgs[@]} > 0 )) || return 0
 
   if need_cmd apt-get; then
-    log "installing packages via apt: ${pkgs[*]}"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y || true
     apt-get install -y "${pkgs[@]}" || true
+  elif need_cmd yum; then
+    yum install -y "${pkgs[@]}" || true
+  elif need_cmd apk; then
+    apk add --no-cache "${pkgs[@]}" || true
   else
-    log "no apt-get found; skipping package installation"
+    log "no supported package manager found; cannot install: ${pkgs[*]}"
+  fi
+}
+
+try_switch_iptables_to_nft() {
+  local nft_path
+  if ! need_cmd update-alternatives; then
+    return 1
   fi
 
+  nft_path="$(update-alternatives --list iptables 2>/dev/null | grep -E 'iptables-nft$' | head -n1 || true)"
+  if [[ -n "$nft_path" ]]; then
+    update-alternatives --set iptables "$nft_path" >/dev/null 2>&1 || true
+  fi
+
+  nft_path="$(update-alternatives --list ip6tables 2>/dev/null | grep -E 'ip6tables-nft$' | head -n1 || true)"
+  if [[ -n "$nft_path" ]]; then
+    update-alternatives --set ip6tables "$nft_path" >/dev/null 2>&1 || true
+  fi
+
+  iptables_uses_nft_backend
+}
+
+install_packages_best_effort() {
+  need_cmd curl || install_pkgs_best_effort curl
   need_cmd curl || die "curl not found"
 
-  if need_cmd ipset && need_cmd iptables; then
-    log "ipset+iptables found; legacy mode is available"
-    # ip6tables may be absent on IPv4-only systems
-    if ! need_cmd ip6tables; then
-      log "note: ip6tables not found (IPv6 rules will be skipped)"
-    fi
-  elif need_cmd iptables && ! need_cmd ipset; then
-    log "iptables found but ipset missing; attempting to install ipset"
-    if need_cmd apt-get; then
-      apt-get update -y || true
-      apt-get install -y ipset || true
-    elif need_cmd yum; then
-      yum install -y ipset || true
-    elif need_cmd apk; then
-      apk add --no-cache ipset || true
-    fi
-
-    if need_cmd ipset; then
-      log "ipset installed; legacy mode is available"
-    elif need_cmd nft; then
-      log "ipset install failed; falling back to existing nftables backend"
-    else
-      die "iptables found but ipset unavailable; no supported backend usable"
-    fi
-  elif need_cmd nft; then
-    log "nft found; nftables mode is available"
-  else
-    log "no firewall backend detected; attempting legacy backend install first"
-    if need_cmd apt-get; then
-      apt-get update -y || true
-      apt-get install -y ipset iptables || true
-    elif need_cmd yum; then
-      yum install -y ipset iptables || true
-    elif need_cmd apk; then
-      apk add --no-cache ipset iptables || true
-    fi
-
-    if need_cmd ipset && need_cmd iptables; then
-      log "ipset+iptables installed; legacy mode will be used"
-      return 0
-    fi
-
-    log "legacy backend unavailable; attempting nftables fallback install"
-    if need_cmd apt-get; then
-      apt-get update -y || true
-      apt-get install -y nftables || true
-    elif need_cmd yum; then
-      yum install -y nftables || true
-    elif need_cmd apk; then
-      apk add --no-cache nftables || true
-    fi
-
-    need_cmd nft || die "no supported firewall backend found (need ipset+iptables or nft)"
-    log "nft installed; nftables mode will be used"
+  # Prefer iptables with nft backend. Ensure iptables/ipset are available first.
+  if ! need_cmd iptables || ! need_cmd ipset; then
+    log "trying preferred backend prerequisites: iptables + ipset"
+    install_pkgs_best_effort iptables ipset
   fi
+
+  if need_cmd iptables && ! iptables_uses_nft_backend; then
+    log "iptables present but not nft backend; trying switch to iptables-nft"
+    try_switch_iptables_to_nft || true
+  fi
+
+  if need_cmd iptables && need_cmd ipset && iptables_uses_nft_backend; then
+    log "iptables-nft + ipset available (preferred backend)"
+    return 0
+  fi
+
+  # Second priority: native nftables.
+  if ! need_cmd nft; then
+    log "preferred backend unavailable; trying nftables"
+    install_pkgs_best_effort nftables
+  fi
+  if need_cmd nft; then
+    log "nftables available (secondary backend)"
+    return 0
+  fi
+
+  # Final fallback: legacy iptables + ipset.
+  if need_cmd iptables && need_cmd ipset; then
+    log "falling back to legacy iptables + ipset (nft backends unavailable)"
+    return 0
+  fi
+
+  die "no supported firewall backend found (need iptables-nft+ipset, nft, or legacy iptables+ipset)"
 }
 
 pick_random_minute() {
