@@ -300,7 +300,7 @@ while IFS= read -r url; do
     # ipset bulk update: create a temporary set, populate it via ipset restore, then swap/rename
     tmp="${setname}_tmp_$$_$RANDOM"
     # ensure tmp name fits within MAX_NAME_LEN
-    tmp=${tmp:0:$MAX_NAME_LEN}
+    # tmp=${tmp:0:$MAX_NAME_LEN}  # Commented out to avoid name collision when setname is already at max length
     log "[*] creating temporary ipset $tmp for bulk update"
     ipset destroy "$tmp" 2>/dev/null || true
 
