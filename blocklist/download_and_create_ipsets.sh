@@ -297,37 +297,21 @@ while IFS= read -r url; do
     log "[*] updated hash for $setname"
 
   else
-    # ipset bulk update: create a temporary set, populate it via ipset restore, then swap/rename
-    tmp="${setname}_tmp_$$_$RANDOM"
-    # ensure tmp name fits within MAX_NAME_LEN
-    # tmp=${tmp:0:$MAX_NAME_LEN}  # Commented out to avoid name collision when setname is already at max length
-    log "[*] creating temporary ipset $tmp for bulk update"
-    ipset destroy "$tmp" 2>/dev/null || true
-
-    # prepare restore content
-    restore_file="$TMPDIR/ipset_restore_$setname"
-    {
-      echo "create $tmp hash:net family $family hashsize $hashsize maxelem $maxelem"
-      for entry in "${entries[@]}"; do
-        echo "add $tmp $entry"
-      done
-    } > "$restore_file"
-
-    if ! ipset restore -f "$restore_file" 2>/dev/null; then
-      log "[!] ipset restore failed for $setname"
-      ipset destroy "$tmp" 2>/dev/null || true
+    # ipset update: flush existing set or create new, then add entries individually
+    if ipset list "$setname" &>/dev/null; then
+      ipset flush "$setname"
+      log "[*] flushed existing set $setname"
     else
-      if ipset list "$setname" &>/dev/null; then
-        log "[*] swapping $tmp -> $setname"
-        ipset swap "$tmp" "$setname" 2>/dev/null || true
-        ipset destroy "$tmp" 2>/dev/null || true
-      else
-        log "[*] renaming $tmp -> $setname"
-        ipset rename "$tmp" "$setname" 2>/dev/null || true
-      fi
-      echo "$current_hash" > "$hash_file"
-      log "[*] updated hash for $setname"
+      ipset create "$setname" hash:net family "$family" hashsize "$hashsize" maxelem "$maxelem"
+      log "[*] created new set $setname"
     fi
+
+    for entry in "${entries[@]}"; do
+      ipset add "$setname" "$entry" 2>/dev/null || log "[!] failed to add $entry to $setname"
+    done
+
+    echo "$current_hash" > "$hash_file"
+    log "[*] updated hash for $setname"
   fi
 
 done < "$URL_FILE"
